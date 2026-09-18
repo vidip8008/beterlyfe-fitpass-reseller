@@ -22,7 +22,7 @@ interface RazorpayOptions {
 
 type CheckoutResult =
   | { status: "success"; payload: RazorpaySuccessPayload }
-  | { status: "failed"; reason?: string }
+  | { status: "failed"; reason?: string | undefined }
   | { status: "dismissed" };
 
 declare global {

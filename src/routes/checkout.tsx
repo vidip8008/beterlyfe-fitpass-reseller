@@ -2,7 +2,6 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { useState, type FormEvent } from "react";
 import { Check, Loader2, Lock, ShieldCheck } from "lucide-react";
-import { z } from "zod";
 import { toast } from "sonner";
 import { SiteLayout } from "@/components/site/SiteLayout";
 import { Button } from "@/components/ui/button";
@@ -241,7 +240,7 @@ function CheckoutPage() {
   );
 }
 
-function Field({ label, id, error, hint, children }: { label: string; id: string; error?: string; hint?: string; children: React.ReactNode }) {
+function Field({ label, id, error, hint, children }: { label: string; id: string; error?: string | undefined; hint?: string | undefined; children: React.ReactNode }) {
   return (
     <div className="grid gap-2">
       <Label htmlFor={id} className="text-sm font-semibold">{label}</Label>
@@ -270,5 +269,3 @@ export function Alert({ tone, title, children }: { tone: "warning" | "error" | "
   );
 }
 
-// keep zod import used for potential future field-level validators
-void z;
