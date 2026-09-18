@@ -1,0 +1,1 @@
+ALTER TABLE public.orders ALTER COLUMN order_id SET DEFAULT '';
