@@ -240,6 +240,15 @@ function Badge({ kind, value }: { kind: "payment" | "voucher"; value: string }) 
 
 /* ---------------- Order detail ---------------- */
 
+type OrderPatch = {
+  payment_status?: PaymentStatus;
+  voucher_status?: VoucherStatus;
+  whatsapp_status?: WhatsAppStatus;
+  voucher_code?: string | null;
+  voucher_instructions?: string | null;
+  admin_notes?: string | null;
+};
+
 function OrderDetail({ order }: { order: OrderRow }) {
   const qc = useQueryClient();
   const update = useServerFn(updateOrder);
@@ -254,7 +263,7 @@ function OrderDetail({ order }: { order: OrderRow }) {
   }, [order.id, order.voucher_code, order.voucher_instructions, order.admin_notes]);
 
   const mutation = useMutation({
-    mutationFn: (patch: Parameters<typeof update>[0]["data"]["patch"]) => update({ data: { id: order.id, patch } }),
+    mutationFn: (patch: OrderPatch) => update({ data: { id: order.id, patch } }),
     onSuccess: (row) => {
       qc.setQueryData<OrderRow[]>(["orders"], (old) => old?.map((o) => (o.id === row.id ? row : o)) ?? [row]);
       toast.success("Order updated");
