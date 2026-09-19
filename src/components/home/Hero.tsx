@@ -113,8 +113,8 @@ function HeroVisual() {
       </div>
 
       {/* Location pins */}
-      <LocationCard className="-left-10 top-6 animate-pin-float" city="YOUR CITY" />
-      <LocationCard className="-right-8 bottom-10 animate-pin-float [animation-delay:1.4s]" city="ANOTHER CITY" />
+      <LocationCard className="-left-14 -top-8 animate-pin-float" city="YOUR CITY" />
+      <LocationCard className="-right-10 -bottom-8 animate-pin-float [animation-delay:1.4s]" city="ANOTHER CITY" />
 
       {/* Glow */}
       <div className="absolute -inset-10 -z-10 rounded-full bg-primary/15 blur-3xl" />
