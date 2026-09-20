@@ -92,7 +92,19 @@ function LoginCard() {
 
 function AdminGate({ userEmail }: { userEmail: string }) {
   const check = useServerFn(getAdminAccess);
-  const access = useQuery({ queryKey: ["admin-access"], queryFn: () => check(), retry: false });
+  const claim = useServerFn(claimAdminRole);
+  const access = useQuery({
+    queryKey: ["admin-access"],
+    retry: false,
+    queryFn: async () => {
+      const first = await check();
+      if (first.isAdmin) return first;
+      // First-admin bootstrap: only grants when the signed-in email is on the
+      // server-side allow-list. Authorisation itself stays server-enforced.
+      const claimed = await claim();
+      return claimed.granted ? await check() : first;
+    },
+  });
 
   if (access.isPending) return <Centered><Loader2 className="size-6 animate-spin text-primary" /></Centered>;
   if (access.isError || !access.data?.isAdmin) {

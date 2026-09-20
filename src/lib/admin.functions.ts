@@ -23,6 +23,38 @@ export const getAdminAccess = createServerFn({ method: "POST" })
     return { isAdmin: Boolean(data) };
   });
 
+/**
+ * First-admin bootstrap. The signed-in user's verified email must already be in
+ * the private `admin_allowlist` table (server-only, no client access, seeded by
+ * migration). Nobody can add themselves — there is no public signup path.
+ */
+export const claimAdminRole = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }) => {
+    const email = String((context.claims as Record<string, unknown>)["email"] ?? "")
+      .trim()
+      .toLowerCase();
+    if (!email) return { granted: false as const };
+
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+
+    const { data: allowed } = await supabaseAdmin
+      .from("admin_allowlist")
+      .select("email")
+      .eq("email", email)
+      .maybeSingle();
+    if (!allowed) return { granted: false as const };
+
+    const { error } = await supabaseAdmin
+      .from("user_roles")
+      .upsert({ user_id: context.userId, role: "admin" }, { onConflict: "user_id,role" });
+    if (error) {
+      console.error("[admin] role grant failed", error);
+      return { granted: false as const };
+    }
+    return { granted: true as const };
+  });
+
 export const listOrders = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .handler(async ({ context }) => {
