@@ -13,7 +13,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { getAdminAccess, listOrders, updateOrder, type OrderRow } from "@/lib/admin.functions";
+import { claimAdminRole, getAdminAccess, listOrders, updateOrder, type OrderRow } from "@/lib/admin.functions";
 import { PAYMENT_STATUS, VOUCHER_STATUS, WHATSAPP_STATUS, formatINR, formatWhatsApp, type PaymentStatus, type VoucherStatus, type WhatsAppStatus } from "@/lib/site";
 import { openVoucherChatUrl } from "@/lib/whatsapp";
 
