@@ -13,7 +13,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { getAdminAccess, listOrders, updateOrder, type OrderRow } from "@/lib/admin.functions";
+import { claimAdminRole, getAdminAccess, listOrders, updateOrder, type OrderRow } from "@/lib/admin.functions";
 import { PAYMENT_STATUS, VOUCHER_STATUS, WHATSAPP_STATUS, formatINR, formatWhatsApp, type PaymentStatus, type VoucherStatus, type WhatsAppStatus } from "@/lib/site";
 import { openVoucherChatUrl } from "@/lib/whatsapp";
 
@@ -92,7 +92,19 @@ function LoginCard() {
 
 function AdminGate({ userEmail }: { userEmail: string }) {
   const check = useServerFn(getAdminAccess);
-  const access = useQuery({ queryKey: ["admin-access"], queryFn: () => check(), retry: false });
+  const claim = useServerFn(claimAdminRole);
+  const access = useQuery({
+    queryKey: ["admin-access"],
+    retry: false,
+    queryFn: async () => {
+      const first = await check();
+      if (first.isAdmin) return first;
+      // First-admin bootstrap: only grants when the signed-in email is on the
+      // server-side allow-list. Authorisation itself stays server-enforced.
+      const claimed = await claim();
+      return claimed.granted ? await check() : first;
+    },
+  });
 
   if (access.isPending) return <Centered><Loader2 className="size-6 animate-spin text-primary" /></Centered>;
   if (access.isError || !access.data?.isAdmin) {
