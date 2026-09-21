@@ -104,17 +104,56 @@ export const createFirstAdmin = createServerFn({ method: "POST" })
       email_confirm: true,
       user_metadata: { full_name: data.full_name },
     });
-    if (createErr || !created.user) {
-      console.error("[admin] first-admin create failed", createErr);
-      return { ok: false as const, reason: "create_failed" as const };
+
+    let userId = created?.user?.id ?? null;
+
+    if (createErr) {
+      const code = (createErr as { code?: string }).code ?? "";
+      const message = createErr.message ?? "";
+      const alreadyExists =
+        code === "email_exists" || /already been registered|already registered/i.test(message);
+
+      if (!alreadyExists) {
+        console.error("[admin] first-admin create failed", createErr);
+        // Safe to surface: Supabase auth messages here are validation feedback
+        // (weak/pwned password, invalid email), never secrets.
+        return { ok: false as const, reason: "create_failed" as const, message };
+      }
+
+      // A previous attempt left an auth user behind without the admin role.
+      // Recover it instead of creating a duplicate: set the password we were
+      // given, confirm the email, then grant the role below.
+      const { data: list } = await supabaseAdmin.auth.admin.listUsers({ page: 1, perPage: 1000 });
+      const existing = list?.users?.find((u) => (u.email ?? "").toLowerCase() === data.email);
+      if (!existing) {
+        return {
+          ok: false as const,
+          reason: "create_failed" as const,
+          message: "An account with this email exists but could not be loaded.",
+        };
+      }
+      const { error: updErr } = await supabaseAdmin.auth.admin.updateUserById(existing.id, {
+        password: data.password,
+        email_confirm: true,
+        user_metadata: { full_name: data.full_name },
+      });
+      if (updErr) {
+        console.error("[admin] first-admin recovery failed", updErr);
+        return { ok: false as const, reason: "create_failed" as const, message: updErr.message };
+      }
+      userId = existing.id;
+    }
+
+    if (!userId) {
+      return { ok: false as const, reason: "create_failed" as const, message: "No account was created." };
     }
 
     const { error: roleErr } = await supabaseAdmin
       .from("user_roles")
-      .upsert({ user_id: created.user.id, role: "admin" }, { onConflict: "user_id,role" });
+      .upsert({ user_id: userId, role: "admin" }, { onConflict: "user_id,role" });
     if (roleErr) {
       console.error("[admin] first-admin role grant failed", roleErr);
-      return { ok: false as const, reason: "create_failed" as const };
+      return { ok: false as const, reason: "create_failed" as const, message: roleErr.message };
     }
     return { ok: true as const };
   });
