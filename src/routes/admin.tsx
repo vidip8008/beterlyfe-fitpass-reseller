@@ -13,7 +13,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { claimAdminRole, getAdminAccess, listOrders, updateOrder, type OrderRow } from "@/lib/admin.functions";
+import { adminSignupStatus, claimAdminRole, createFirstAdmin, getAdminAccess, listOrders, updateOrder, type OrderRow } from "@/lib/admin.functions";
 import { PAYMENT_STATUS, VOUCHER_STATUS, WHATSAPP_STATUS, formatINR, formatWhatsApp, type PaymentStatus, type VoucherStatus, type WhatsAppStatus } from "@/lib/site";
 import { openVoucherChatUrl } from "@/lib/whatsapp";
 
@@ -57,33 +57,90 @@ function LoginCard() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
+  const [mode, setMode] = useState<"signin" | "signup">("signin");
+  const [fullName, setFullName] = useState("");
+  const [confirm, setConfirm] = useState("");
+
+  const signupStatus = useServerFn(adminSignupStatus);
+  const signUp = useServerFn(createFirstAdmin);
+  const status = useQuery({ queryKey: ["admin-signup-open"], retry: false, queryFn: () => signupStatus() });
+  const signupOpen = status.data?.open === true;
 
   async function submit(e: FormEvent) {
     e.preventDefault();
     setBusy(true);
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    setBusy(false);
-    if (error) toast.error("Sign-in failed. Check your email and password.");
+    try {
+      if (mode === "signup") {
+        if (password !== confirm) {
+          toast.error("Passwords do not match.");
+          return;
+        }
+        if (password.length < 10) {
+          toast.error("Use a password of at least 10 characters.");
+          return;
+        }
+        const res = await signUp({ data: { full_name: fullName, email, password } });
+        if (!res.ok) {
+          toast.error(
+            res.reason === "not_allowed"
+              ? "This email is not authorised to create the admin account."
+              : res.reason === "closed"
+                ? "An admin account already exists. Please sign in."
+                : "Could not create the admin account. Please try again.",
+          );
+          if (res.reason === "closed") setMode("signin");
+          return;
+        }
+        toast.success("Admin account created.");
+      }
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) toast.error("Sign-in failed. Check your email and password.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
     <Centered>
       <form onSubmit={submit} className="surface-card w-full max-w-sm rounded-3xl p-7">
         <Logo compact />
-        <h1 className="mt-6 text-2xl font-extrabold">Admin sign in</h1>
+        <h1 className="mt-6 text-2xl font-extrabold">
+          {mode === "signup" ? "Create admin account" : "Admin sign in"}
+        </h1>
         <p className="mt-1 text-sm text-muted-foreground">Restricted to BeterLyfe staff.</p>
         <div className="mt-6 grid gap-4">
+          {mode === "signup" && (
+            <div className="grid gap-2">
+              <Label htmlFor="full_name">Full Name</Label>
+              <Input id="full_name" autoComplete="name" value={fullName} onChange={(e) => setFullName(e.target.value)} required />
+            </div>
+          )}
           <div className="grid gap-2">
             <Label htmlFor="email">Email</Label>
             <Input id="email" type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
           </div>
           <div className="grid gap-2">
             <Label htmlFor="password">Password</Label>
-            <Input id="password" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+            <Input id="password" type="password" autoComplete={mode === "signup" ? "new-password" : "current-password"} value={password} onChange={(e) => setPassword(e.target.value)} required />
           </div>
+          {mode === "signup" && (
+            <div className="grid gap-2">
+              <Label htmlFor="confirm">Confirm Password</Label>
+              <Input id="confirm" type="password" autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} required />
+            </div>
+          )}
           <Button type="submit" variant="hero" size="lg" disabled={busy}>
-            {busy && <Loader2 className="animate-spin" />} Sign in
+            {busy && <Loader2 className="animate-spin" />} {mode === "signup" ? "Create admin account" : "Sign in"}
           </Button>
+          {signupOpen && (
+            <button
+              type="button"
+              className="text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground"
+              onClick={() => setMode((m) => (m === "signin" ? "signup" : "signin"))}
+            >
+              {mode === "signin" ? "Create the first admin account" : "Back to sign in"}
+            </button>
+          )}
         </div>
       </form>
     </Centered>
