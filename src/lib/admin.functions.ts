@@ -55,6 +55,70 @@ export const claimAdminRole = createServerFn({ method: "POST" })
     return { granted: true as const };
   });
 
+/**
+ * Is first-admin signup still open? True only while zero admins exist.
+ * Public (no auth) but leaks nothing beyond that boolean.
+ */
+export const adminSignupStatus = createServerFn({ method: "POST" }).handler(async () => {
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  const { count } = await supabaseAdmin
+    .from("user_roles")
+    .select("id", { count: "exact", head: true })
+    .eq("role", "admin");
+  return { open: (count ?? 0) === 0 };
+});
+
+const signupSchema = z.object({
+  full_name: z.string().trim().min(2).max(100),
+  email: z.string().trim().toLowerCase().email(),
+  password: z.string().min(10, "Use at least 10 characters").max(200),
+});
+
+/**
+ * Creates the very first admin account. Guarded three ways:
+ *  - the email must be on the server-only `admin_allowlist`
+ *  - it only works while no admin role exists at all
+ *  - the role is granted server-side with the service key; clients cannot self-grant
+ */
+export const createFirstAdmin = createServerFn({ method: "POST" })
+  .inputValidator((input: unknown) => signupSchema.parse(input))
+  .handler(async ({ data }) => {
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+
+    const { count } = await supabaseAdmin
+      .from("user_roles")
+      .select("id", { count: "exact", head: true })
+      .eq("role", "admin");
+    if ((count ?? 0) > 0) return { ok: false as const, reason: "closed" as const };
+
+    const { data: allowed } = await supabaseAdmin
+      .from("admin_allowlist")
+      .select("email")
+      .eq("email", data.email)
+      .maybeSingle();
+    if (!allowed) return { ok: false as const, reason: "not_allowed" as const };
+
+    const { data: created, error: createErr } = await supabaseAdmin.auth.admin.createUser({
+      email: data.email,
+      password: data.password,
+      email_confirm: true,
+      user_metadata: { full_name: data.full_name },
+    });
+    if (createErr || !created.user) {
+      console.error("[admin] first-admin create failed", createErr);
+      return { ok: false as const, reason: "create_failed" as const };
+    }
+
+    const { error: roleErr } = await supabaseAdmin
+      .from("user_roles")
+      .upsert({ user_id: created.user.id, role: "admin" }, { onConflict: "user_id,role" });
+    if (roleErr) {
+      console.error("[admin] first-admin role grant failed", roleErr);
+      return { ok: false as const, reason: "create_failed" as const };
+    }
+    return { ok: true as const };
+  });
+
 export const listOrders = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .handler(async ({ context }) => {
