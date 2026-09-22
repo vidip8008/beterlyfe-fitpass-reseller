@@ -42,6 +42,27 @@ export const createRazorpayOrder = createServerFn({ method: "POST" })
     const { createRazorpayOrderRemote, getRazorpayKeys, PaymentsNotConfiguredError } =
       await import("./razorpay.server");
 
+    // Duplicate-membership guard (server-side): a WhatsApp number that already has a
+    // PAID membership never gets a second Razorpay order. Pending/failed/refunded
+    // orders are not memberships, so those customers can buy normally.
+    const { data: existingPaid } = await supabaseAdmin
+      .from("orders")
+      .select("order_id, payment_status, voucher_status, created_at")
+      .eq("whatsapp_number", data.whatsapp_number)
+      .eq("payment_status", "paid")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (existingPaid) {
+      return {
+        ok: false as const,
+        code: "EXISTING_MEMBERSHIP" as const,
+        order_id: existingPaid.order_id,
+        whatsapp_number: data.whatsapp_number,
+      };
+    }
+
     // Fail fast with a clear message when Razorpay credentials are not set yet.
     let keyId: string;
     try {
