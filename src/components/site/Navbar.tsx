@@ -52,6 +52,12 @@ export function Navbar() {
               {n.label}
             </a>
           ))}
+          <Link
+            to="/track"
+            className="rounded-full px-4 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+          >
+            Track Your Order
+          </Link>
         </nav>
 
         <div className="hidden items-center gap-2 lg:flex">

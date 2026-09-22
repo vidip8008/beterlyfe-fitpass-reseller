@@ -13,7 +13,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { adminSignupStatus, claimAdminRole, createFirstAdmin, getAdminAccess, listOrders, updateOrder, type OrderRow } from "@/lib/admin.functions";
+import { claimAdminRole, createAccount, getAdminAccess, listOrders, updateOrder, type OrderRow } from "@/lib/admin.functions";
 import { PAYMENT_STATUS, VOUCHER_STATUS, WHATSAPP_STATUS, formatINR, formatWhatsApp, type PaymentStatus, type VoucherStatus, type WhatsAppStatus } from "@/lib/site";
 import { openVoucherChatUrl } from "@/lib/whatsapp";
 
@@ -61,10 +61,7 @@ function LoginCard() {
   const [fullName, setFullName] = useState("");
   const [confirm, setConfirm] = useState("");
 
-  const signupStatus = useServerFn(adminSignupStatus);
-  const signUp = useServerFn(createFirstAdmin);
-  const status = useQuery({ queryKey: ["admin-signup-open"], retry: false, queryFn: () => signupStatus() });
-  const signupOpen = status.data?.open === true;
+  const signUp = useServerFn(createAccount);
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -81,17 +78,19 @@ function LoginCard() {
         }
         const res = await signUp({ data: { full_name: fullName, email, password } });
         if (!res.ok) {
+          if (res.reason === "email_exists") {
+            toast.error("An account with this email already exists. Please sign in instead.");
+            setMode("signin");
+            return;
+          }
           toast.error(
-            res.reason === "not_allowed"
-              ? "This email is not authorised to create the admin account."
-              : res.reason === "closed"
-                ? "An admin account already exists. Please sign in."
-                : "Could not create the admin account. Please try again.",
+            res.reason === "weak_password"
+              ? res.message || "That password is too weak. Choose a stronger one."
+              : `Could not create the account. ${res.message || "Please try again."}`,
           );
-          if (res.reason === "closed") setMode("signin");
           return;
         }
-        toast.success("Admin account created.");
+        toast.success("Account created.");
       }
       const { error } = await supabase.auth.signInWithPassword({ email, password });
       if (error) toast.error("Sign-in failed. Check your email and password.");
@@ -105,9 +104,11 @@ function LoginCard() {
       <form onSubmit={submit} className="surface-card w-full max-w-sm rounded-3xl p-7">
         <Logo compact />
         <h1 className="mt-6 text-2xl font-extrabold">
-          {mode === "signup" ? "Create admin account" : "Admin sign in"}
+          {mode === "signup" ? "Create account" : "Admin sign in"}
         </h1>
-        <p className="mt-1 text-sm text-muted-foreground">Restricted to BeterLyfe staff.</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Admin access is granted by BeterLyfe staff — creating an account does not grant it.
+        </p>
         <div className="mt-6 grid gap-4">
           {mode === "signup" && (
             <div className="grid gap-2">
@@ -130,17 +131,15 @@ function LoginCard() {
             </div>
           )}
           <Button type="submit" variant="hero" size="lg" disabled={busy}>
-            {busy && <Loader2 className="animate-spin" />} {mode === "signup" ? "Create admin account" : "Sign in"}
+            {busy && <Loader2 className="animate-spin" />} {mode === "signup" ? "Create account" : "Sign in"}
           </Button>
-          {signupOpen && (
-            <button
-              type="button"
-              className="text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground"
-              onClick={() => setMode((m) => (m === "signin" ? "signup" : "signin"))}
-            >
-              {mode === "signin" ? "Create the first admin account" : "Back to sign in"}
-            </button>
-          )}
+          <button
+            type="button"
+            className="text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground"
+            onClick={() => setMode((m) => (m === "signin" ? "signup" : "signin"))}
+          >
+            {mode === "signin" ? "Create an account" : "Back to sign in"}
+          </button>
         </div>
       </form>
     </Centered>

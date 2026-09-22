@@ -42,6 +42,27 @@ export const createRazorpayOrder = createServerFn({ method: "POST" })
     const { createRazorpayOrderRemote, getRazorpayKeys, PaymentsNotConfiguredError } =
       await import("./razorpay.server");
 
+    // Duplicate-membership guard (server-side): a WhatsApp number that already has a
+    // PAID membership never gets a second Razorpay order. Pending/failed/refunded
+    // orders are not memberships, so those customers can buy normally.
+    const { data: existingPaid } = await supabaseAdmin
+      .from("orders")
+      .select("order_id, payment_status, voucher_status, created_at")
+      .eq("whatsapp_number", data.whatsapp_number)
+      .eq("payment_status", "paid")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (existingPaid) {
+      return {
+        ok: false as const,
+        code: "EXISTING_MEMBERSHIP" as const,
+        order_id: existingPaid.order_id,
+        whatsapp_number: data.whatsapp_number,
+      };
+    }
+
     // Fail fast with a clear message when Razorpay credentials are not set yet.
     let keyId: string;
     try {
@@ -181,3 +202,28 @@ export const trackOrder = createServerFn({ method: "POST" })
   });
 
 export type TrackedOrder = Extract<Awaited<ReturnType<typeof trackOrder>>, { ok: true }>["order"];
+
+/* ---------- Public: customer order tracking by WhatsApp number ---------- */
+
+/**
+ * Lists the customer's own orders for a WhatsApp number. Only safe,
+ * customer-facing columns are selected — never admin notes, voucher codes,
+ * Razorpay ids or any other customer's data.
+ */
+export const trackOrdersByWhatsApp = createServerFn({ method: "POST" })
+  .inputValidator((input: unknown) => z.object({ whatsapp_number: whatsappSchema }).parse(input))
+  .handler(async ({ data }) => {
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data: rows } = await supabaseAdmin
+      .from("orders")
+      .select(
+        "order_id, customer_name, whatsapp_number, city, amount, currency, payment_status, voucher_status, whatsapp_status, created_at, updated_at",
+      )
+      .eq("whatsapp_number", data.whatsapp_number)
+      .order("created_at", { ascending: false })
+      .limit(10);
+
+    const orders = (rows ?? []).map((o) => ({ ...o, membership: SITE.product }));
+    if (orders.length === 0) return { ok: false as const, code: "NOT_FOUND" as const };
+    return { ok: true as const, orders };
+  });
