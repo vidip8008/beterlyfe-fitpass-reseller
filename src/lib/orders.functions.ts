@@ -202,3 +202,28 @@ export const trackOrder = createServerFn({ method: "POST" })
   });
 
 export type TrackedOrder = Extract<Awaited<ReturnType<typeof trackOrder>>, { ok: true }>["order"];
+
+/* ---------- Public: customer order tracking by WhatsApp number ---------- */
+
+/**
+ * Lists the customer's own orders for a WhatsApp number. Only safe,
+ * customer-facing columns are selected — never admin notes, voucher codes,
+ * Razorpay ids or any other customer's data.
+ */
+export const trackOrdersByWhatsApp = createServerFn({ method: "POST" })
+  .inputValidator((input: unknown) => z.object({ whatsapp_number: whatsappSchema }).parse(input))
+  .handler(async ({ data }) => {
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data: rows } = await supabaseAdmin
+      .from("orders")
+      .select(
+        "order_id, customer_name, whatsapp_number, city, amount, currency, payment_status, voucher_status, whatsapp_status, created_at, updated_at",
+      )
+      .eq("whatsapp_number", data.whatsapp_number)
+      .order("created_at", { ascending: false })
+      .limit(10);
+
+    const orders = (rows ?? []).map((o) => ({ ...o, membership: SITE.product }));
+    if (orders.length === 0) return { ok: false as const, code: "NOT_FOUND" as const };
+    return { ok: true as const, orders };
+  });
