@@ -75,6 +75,14 @@ function CheckoutPage() {
       return;
     }
     if (!created.ok) {
+      if (created.code === "EXISTING_MEMBERSHIP") {
+        setPhase("idle");
+        navigate({
+          to: "/membership-found",
+          search: { order_id: created.order_id, wa: created.whatsapp_number },
+        });
+        return;
+      }
       setPhase("unconfigured");
       return;
     }
