@@ -104,9 +104,11 @@ function LoginCard() {
       <form onSubmit={submit} className="surface-card w-full max-w-sm rounded-3xl p-7">
         <Logo compact />
         <h1 className="mt-6 text-2xl font-extrabold">
-          {mode === "signup" ? "Create admin account" : "Admin sign in"}
+          {mode === "signup" ? "Create account" : "Admin sign in"}
         </h1>
-        <p className="mt-1 text-sm text-muted-foreground">Restricted to BeterLyfe staff.</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Admin access is granted by BeterLyfe staff — creating an account does not grant it.
+        </p>
         <div className="mt-6 grid gap-4">
           {mode === "signup" && (
             <div className="grid gap-2">
@@ -129,17 +131,15 @@ function LoginCard() {
             </div>
           )}
           <Button type="submit" variant="hero" size="lg" disabled={busy}>
-            {busy && <Loader2 className="animate-spin" />} {mode === "signup" ? "Create admin account" : "Sign in"}
+            {busy && <Loader2 className="animate-spin" />} {mode === "signup" ? "Create account" : "Sign in"}
           </Button>
-          {signupOpen && (
-            <button
-              type="button"
-              className="text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground"
-              onClick={() => setMode((m) => (m === "signin" ? "signup" : "signin"))}
-            >
-              {mode === "signin" ? "Create the first admin account" : "Back to sign in"}
-            </button>
-          )}
+          <button
+            type="button"
+            className="text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground"
+            onClick={() => setMode((m) => (m === "signin" ? "signup" : "signin"))}
+          >
+            {mode === "signin" ? "Create an account" : "Back to sign in"}
+          </button>
         </div>
       </form>
     </Centered>
