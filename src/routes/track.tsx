@@ -162,7 +162,7 @@ function EmptyState() {
     <div className="grid h-full min-h-64 place-items-center text-center">
       <div>
         <p className="font-semibold">Your order status will appear here</p>
-        <p className="mt-2 text-sm text-muted-foreground">Only you can see your order — both details must match.</p>
+        <p className="mt-2 text-sm text-muted-foreground">Only your own order details are ever shown here.</p>
       </div>
     </div>
   );
