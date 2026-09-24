@@ -36,23 +36,30 @@ export const claimAdminRole = createServerFn({ method: "POST" })
       .toLowerCase();
     if (!email) return { granted: false as const };
 
-    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    try {
+      const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
 
-    const { data: allowed } = await supabaseAdmin
-      .from("admin_allowlist")
-      .select("email")
-      .eq("email", email)
-      .maybeSingle();
-    if (!allowed) return { granted: false as const };
+      const { data: allowed } = await supabaseAdmin
+        .from("admin_allowlist")
+        .select("email")
+        .eq("email", email)
+        .maybeSingle();
+      if (!allowed) return { granted: false as const };
 
-    const { error } = await supabaseAdmin
-      .from("user_roles")
-      .upsert({ user_id: context.userId, role: "admin" }, { onConflict: "user_id,role" });
-    if (error) {
-      console.error("[admin] role grant failed", error);
+      const { error } = await supabaseAdmin
+        .from("user_roles")
+        .upsert({ user_id: context.userId, role: "admin" }, { onConflict: "user_id,role" });
+      if (error) {
+        console.error("[admin] role grant failed", error);
+        return { granted: false as const };
+      }
+      return { granted: true as const };
+    } catch (e) {
+      // Bootstrap needs the privileged key; hosts without it simply cannot grant
+      // a first admin. Existing admins are unaffected (their role is already set).
+      console.error("[admin] role grant unavailable", (e as Error).message);
       return { granted: false as const };
     }
-    return { granted: true as const };
   });
 
 const signupSchema = z.object({
@@ -72,12 +79,27 @@ export const createAccount = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
 
-    const { data: created, error: createErr } = await supabaseAdmin.auth.admin.createUser({
-      email: data.email,
-      password: data.password,
-      email_confirm: true,
-      user_metadata: { full_name: data.full_name },
-    });
+    let created: { user: { id: string } | null } | null = null;
+    let createErr: { code?: string; message?: string } | null = null;
+    try {
+      const res = await supabaseAdmin.auth.admin.createUser({
+        email: data.email,
+        password: data.password,
+        email_confirm: true,
+        user_metadata: { full_name: data.full_name },
+      });
+      created = res.data as { user: { id: string } | null };
+      createErr = res.error as { code?: string; message?: string } | null;
+    } catch (e) {
+      // Account creation needs the privileged key, which only the Lovable-hosted
+      // backend provides. Other hosts can still sign in existing accounts.
+      console.error("[admin] signup unavailable", (e as Error).message);
+      return {
+        ok: false as const,
+        reason: "create_failed" as const,
+        message: "Account creation is not available on this deployment.",
+      };
+    }
 
     if (createErr || !created?.user) {
       const code = (createErr as { code?: string } | null)?.code ?? "";

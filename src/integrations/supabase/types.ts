@@ -29,6 +29,24 @@ export type Database = {
         }
         Relationships: []
       }
+      app_secrets: {
+        Row: {
+          key: string
+          updated_at: string
+          value: string
+        }
+        Insert: {
+          key: string
+          updated_at?: string
+          value: string
+        }
+        Update: {
+          key?: string
+          updated_at?: string
+          value?: string
+        }
+        Relationships: []
+      }
       orders: {
         Row: {
           admin_notes: string | null
@@ -148,12 +166,79 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      app_secret: { Args: { _key: string }; Returns: string }
+      checkout_attach_razorpay_order: {
+        Args: { _order_uuid: string; _razorpay_order_id: string }
+        Returns: boolean
+      }
+      checkout_start: {
+        Args: {
+          _city: string
+          _customer_name: string
+          _email: string
+          _whatsapp_number: string
+        }
+        Returns: {
+          order_id: string
+          order_uuid: string
+          payment_status: string
+          status: string
+          voucher_status: string
+        }[]
+      }
       has_role: {
         Args: {
           _role: Database["public"]["Enums"]["app_role"]
           _user_id: string
         }
         Returns: boolean
+      }
+      payment_mark_paid: {
+        Args: {
+          _razorpay_order_id: string
+          _razorpay_payment_id: string
+          _razorpay_signature: string
+        }
+        Returns: {
+          order_id: string
+          whatsapp_number: string
+        }[]
+      }
+      razorpay_webhook_apply: {
+        Args: { _event_id: string; _raw_body: string; _signature: string }
+        Returns: Json
+      }
+      track_order_public: {
+        Args: { _order_id: string; _whatsapp_number: string }
+        Returns: {
+          amount: number
+          city: string
+          created_at: string
+          currency: string
+          customer_name: string
+          order_id: string
+          payment_status: string
+          updated_at: string
+          voucher_status: string
+          whatsapp_number: string
+          whatsapp_status: string
+        }[]
+      }
+      track_orders_by_whatsapp_public: {
+        Args: { _whatsapp_number: string }
+        Returns: {
+          amount: number
+          city: string
+          created_at: string
+          currency: string
+          customer_name: string
+          order_id: string
+          payment_status: string
+          updated_at: string
+          voucher_status: string
+          whatsapp_number: string
+          whatsapp_status: string
+        }[]
       }
     }
     Enums: {

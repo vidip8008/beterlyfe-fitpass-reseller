@@ -38,30 +38,10 @@ const whatsappSchema = z
 export const createRazorpayOrder = createServerFn({ method: "POST" })
   .inputValidator((input: unknown) => checkoutSchema.parse(input))
   .handler(async ({ data }) => {
-    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { getPublicServerClient } = await import("./supabase-public.server");
     const { createRazorpayOrderRemote, getRazorpayKeys, PaymentsNotConfiguredError } =
       await import("./razorpay.server");
-
-    // Duplicate-membership guard (server-side): a WhatsApp number that already has a
-    // PAID membership never gets a second Razorpay order. Pending/failed/refunded
-    // orders are not memberships, so those customers can buy normally.
-    const { data: existingPaid } = await supabaseAdmin
-      .from("orders")
-      .select("order_id, payment_status, voucher_status, created_at")
-      .eq("whatsapp_number", data.whatsapp_number)
-      .eq("payment_status", "paid")
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (existingPaid) {
-      return {
-        ok: false as const,
-        code: "EXISTING_MEMBERSHIP" as const,
-        order_id: existingPaid.order_id,
-        whatsapp_number: data.whatsapp_number,
-      };
-    }
+    const supabase = getPublicServerClient();
 
     // Fail fast with a clear message when Razorpay credentials are not set yet.
     let keyId: string;
@@ -74,46 +54,53 @@ export const createRazorpayOrder = createServerFn({ method: "POST" })
       throw e;
     }
 
-    // 1. Create the internal BeterLyfe order. Amount/currency come from defaults, never the client.
-    const { data: order, error } = await supabaseAdmin
-      .from("orders")
-      .insert({
-        customer_name: data.customer_name,
-        whatsapp_number: data.whatsapp_number,
-        email: data.email,
-        city: data.city,
-        amount: SITE.pricePaise,
-        currency: SITE.currency,
-      })
-      .select("id, order_id, amount, currency")
-      .single();
+    // 1. Duplicate-membership guard + order creation happen inside one hardened
+    //    database function: amount/currency are fixed server-side (800000 INR),
+    //    and a WhatsApp number that already has a PAID membership never gets a
+    //    second Razorpay order.
+    const { data: started, error: startErr } = await supabase.rpc("checkout_start", {
+      _customer_name: data.customer_name,
+      _whatsapp_number: data.whatsapp_number,
+      _email: data.email,
+      _city: data.city,
+    });
 
-    if (error || !order) {
-      console.error("[orders] insert failed", error);
+    const row = Array.isArray(started) ? started[0] : started;
+    if (startErr || !row) {
+      console.error("[orders] checkout_start failed", startErr);
       throw new Error("ORDER_CREATE_FAILED");
+    }
+
+    if (row.status === "existing") {
+      return {
+        ok: false as const,
+        code: "EXISTING_MEMBERSHIP" as const,
+        order_id: row.order_id,
+        whatsapp_number: data.whatsapp_number,
+      };
     }
 
     // 2. Create the Razorpay order server-side for exactly 800000 paise.
     const rz = await createRazorpayOrderRemote({
       amountPaise: SITE.pricePaise,
       currency: SITE.currency,
-      receipt: order.order_id,
-      notes: { beterlyfe_order_id: order.order_id, product: SITE.product },
+      receipt: row.order_id,
+      notes: { beterlyfe_order_id: row.order_id, product: SITE.product },
     });
 
     // 3. Store the Razorpay order id.
-    const { error: updErr } = await supabaseAdmin
-      .from("orders")
-      .update({ razorpay_order_id: rz.id })
-      .eq("id", order.id);
-    if (updErr) {
-      console.error("[orders] store razorpay id failed", updErr);
+    const { error: attachErr } = await supabase.rpc("checkout_attach_razorpay_order", {
+      _order_uuid: row.order_uuid,
+      _razorpay_order_id: rz.id,
+    });
+    if (attachErr) {
+      console.error("[orders] store razorpay id failed", attachErr);
       throw new Error("ORDER_CREATE_FAILED");
     }
 
     return {
       ok: true as const,
-      order_id: order.order_id,
+      order_id: row.order_id,
       razorpay_order_id: rz.id,
       amount: SITE.pricePaise,
       currency: SITE.currency,
@@ -139,44 +126,40 @@ export const verifyRazorpayPayment = createServerFn({ method: "POST" })
       .parse(input),
   )
   .handler(async ({ data }) => {
-    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { getPublicServerClient } = await import("./supabase-public.server");
     const { verifyPaymentSignature } = await import("./razorpay.server");
 
+    // Signature is checked here AND again inside the database function, so an
+    // order can never be marked paid without a genuine Razorpay signature.
     const valid = await verifyPaymentSignature(data);
     if (!valid) {
       return { ok: false as const, code: "INVALID_SIGNATURE" as const };
     }
 
-    const { data: existing } = await supabaseAdmin
-      .from("orders")
-      .select("id, order_id, payment_status, whatsapp_number")
-      .eq("razorpay_order_id", data.razorpay_order_id)
-      .maybeSingle();
+    const supabase = getPublicServerClient();
+    const { data: result, error } = await supabase.rpc("payment_mark_paid", {
+      _razorpay_order_id: data.razorpay_order_id,
+      _razorpay_payment_id: data.razorpay_payment_id,
+      _razorpay_signature: data.razorpay_signature,
+    });
 
-    if (!existing) return { ok: false as const, code: "ORDER_NOT_FOUND" as const };
-
-    // Idempotent: only transition to paid once.
-    if (existing.payment_status !== "paid") {
-      const { error } = await supabaseAdmin
-        .from("orders")
-        .update({
-          payment_status: "paid",
-          razorpay_payment_id: data.razorpay_payment_id,
-          razorpay_signature: data.razorpay_signature,
-          voucher_status: "processing",
-        })
-        .eq("id", existing.id)
-        .neq("payment_status", "paid");
-      if (error) {
-        console.error("[orders] mark paid failed", error);
-        throw new Error("VERIFY_FAILED");
+    const row = Array.isArray(result) ? result[0] : result;
+    if (error || !row) {
+      const message = error?.message ?? "";
+      if (/invalid_signature/.test(message)) {
+        return { ok: false as const, code: "INVALID_SIGNATURE" as const };
       }
+      if (/order_not_found/.test(message)) {
+        return { ok: false as const, code: "ORDER_NOT_FOUND" as const };
+      }
+      console.error("[orders] mark paid failed", error);
+      throw new Error("VERIFY_FAILED");
     }
 
     return {
       ok: true as const,
-      order_id: existing.order_id,
-      whatsapp_number: existing.whatsapp_number,
+      order_id: row.order_id,
+      whatsapp_number: row.whatsapp_number,
     };
   });
 
@@ -187,16 +170,14 @@ export const trackOrder = createServerFn({ method: "POST" })
     z.object({ order_id: orderIdSchema, whatsapp_number: whatsappSchema }).parse(input),
   )
   .handler(async ({ data }) => {
-    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    const { data: order } = await supabaseAdmin
-      .from("orders")
-      .select(
-        "order_id, customer_name, whatsapp_number, city, amount, currency, payment_status, voucher_status, whatsapp_status, created_at, updated_at",
-      )
-      .eq("order_id", data.order_id)
-      .eq("whatsapp_number", data.whatsapp_number)
-      .maybeSingle();
+    const { getPublicServerClient } = await import("./supabase-public.server");
+    const supabase = getPublicServerClient();
+    const { data: rows } = await supabase.rpc("track_order_public", {
+      _order_id: data.order_id,
+      _whatsapp_number: data.whatsapp_number,
+    });
 
+    const order = Array.isArray(rows) ? rows[0] : rows;
     if (!order) return { ok: false as const, code: "NOT_FOUND" as const };
     return { ok: true as const, order: { ...order, membership: SITE.product } };
   });
@@ -206,22 +187,18 @@ export type TrackedOrder = Extract<Awaited<ReturnType<typeof trackOrder>>, { ok:
 /* ---------- Public: customer order tracking by WhatsApp number ---------- */
 
 /**
- * Lists the customer's own orders for a WhatsApp number. Only safe,
- * customer-facing columns are selected — never admin notes, voucher codes,
- * Razorpay ids or any other customer's data.
+ * Lists the customer's own orders for a WhatsApp number. The database function
+ * returns only safe, customer-facing columns — never admin notes, voucher
+ * codes, Razorpay ids or any other customer's data.
  */
 export const trackOrdersByWhatsApp = createServerFn({ method: "POST" })
   .inputValidator((input: unknown) => z.object({ whatsapp_number: whatsappSchema }).parse(input))
   .handler(async ({ data }) => {
-    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    const { data: rows } = await supabaseAdmin
-      .from("orders")
-      .select(
-        "order_id, customer_name, whatsapp_number, city, amount, currency, payment_status, voucher_status, whatsapp_status, created_at, updated_at",
-      )
-      .eq("whatsapp_number", data.whatsapp_number)
-      .order("created_at", { ascending: false })
-      .limit(10);
+    const { getPublicServerClient } = await import("./supabase-public.server");
+    const supabase = getPublicServerClient();
+    const { data: rows } = await supabase.rpc("track_orders_by_whatsapp_public", {
+      _whatsapp_number: data.whatsapp_number,
+    });
 
     const orders = (rows ?? []).map((o) => ({ ...o, membership: SITE.product }));
     if (orders.length === 0) return { ok: false as const, code: "NOT_FOUND" as const };
