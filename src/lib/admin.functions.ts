@@ -77,27 +77,29 @@ const signupSchema = z.object({
 export const createAccount = createServerFn({ method: "POST" })
   .inputValidator((input: unknown) => signupSchema.parse(input))
   .handler(async ({ data }) => {
-    let supabaseAdmin: Awaited<
-      typeof import("@/integrations/supabase/client.server")
-    >["supabaseAdmin"];
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+
+    let created: { user: { id: string } | null } | null = null;
+    let createErr: { code?: string; message?: string } | null = null;
     try {
-      ({ supabaseAdmin } = await import("@/integrations/supabase/client.server"));
+      const res = await supabaseAdmin.auth.admin.createUser({
+        email: data.email,
+        password: data.password,
+        email_confirm: true,
+        user_metadata: { full_name: data.full_name },
+      });
+      created = res.data as { user: { id: string } | null };
+      createErr = res.error as { code?: string; message?: string } | null;
     } catch (e) {
+      // Account creation needs the privileged key, which only the Lovable-hosted
+      // backend provides. Other hosts can still sign in existing accounts.
       console.error("[admin] signup unavailable", (e as Error).message);
       return {
         ok: false as const,
         reason: "create_failed" as const,
-        message: "Account creation is not available on this host.",
+        message: "Account creation is not available on this deployment.",
       };
     }
-
-
-    const { data: created, error: createErr } = await supabaseAdmin.auth.admin.createUser({
-      email: data.email,
-      password: data.password,
-      email_confirm: true,
-      user_metadata: { full_name: data.full_name },
-    });
 
     if (createErr || !created?.user) {
       const code = (createErr as { code?: string } | null)?.code ?? "";
