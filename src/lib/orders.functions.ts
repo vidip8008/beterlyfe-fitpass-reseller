@@ -38,30 +38,10 @@ const whatsappSchema = z
 export const createRazorpayOrder = createServerFn({ method: "POST" })
   .inputValidator((input: unknown) => checkoutSchema.parse(input))
   .handler(async ({ data }) => {
-    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { getPublicServerClient } = await import("./supabase-public.server");
     const { createRazorpayOrderRemote, getRazorpayKeys, PaymentsNotConfiguredError } =
       await import("./razorpay.server");
-
-    // Duplicate-membership guard (server-side): a WhatsApp number that already has a
-    // PAID membership never gets a second Razorpay order. Pending/failed/refunded
-    // orders are not memberships, so those customers can buy normally.
-    const { data: existingPaid } = await supabaseAdmin
-      .from("orders")
-      .select("order_id, payment_status, voucher_status, created_at")
-      .eq("whatsapp_number", data.whatsapp_number)
-      .eq("payment_status", "paid")
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (existingPaid) {
-      return {
-        ok: false as const,
-        code: "EXISTING_MEMBERSHIP" as const,
-        order_id: existingPaid.order_id,
-        whatsapp_number: data.whatsapp_number,
-      };
-    }
+    const supabase = getPublicServerClient();
 
     // Fail fast with a clear message when Razorpay credentials are not set yet.
     let keyId: string;
@@ -74,46 +54,53 @@ export const createRazorpayOrder = createServerFn({ method: "POST" })
       throw e;
     }
 
-    // 1. Create the internal BeterLyfe order. Amount/currency come from defaults, never the client.
-    const { data: order, error } = await supabaseAdmin
-      .from("orders")
-      .insert({
-        customer_name: data.customer_name,
-        whatsapp_number: data.whatsapp_number,
-        email: data.email,
-        city: data.city,
-        amount: SITE.pricePaise,
-        currency: SITE.currency,
-      })
-      .select("id, order_id, amount, currency")
-      .single();
+    // 1. Duplicate-membership guard + order creation happen inside one hardened
+    //    database function: amount/currency are fixed server-side (800000 INR),
+    //    and a WhatsApp number that already has a PAID membership never gets a
+    //    second Razorpay order.
+    const { data: started, error: startErr } = await supabase.rpc("checkout_start", {
+      _customer_name: data.customer_name,
+      _whatsapp_number: data.whatsapp_number,
+      _email: data.email,
+      _city: data.city,
+    });
 
-    if (error || !order) {
-      console.error("[orders] insert failed", error);
+    const row = Array.isArray(started) ? started[0] : started;
+    if (startErr || !row) {
+      console.error("[orders] checkout_start failed", startErr);
       throw new Error("ORDER_CREATE_FAILED");
+    }
+
+    if (row.status === "existing") {
+      return {
+        ok: false as const,
+        code: "EXISTING_MEMBERSHIP" as const,
+        order_id: row.order_id,
+        whatsapp_number: data.whatsapp_number,
+      };
     }
 
     // 2. Create the Razorpay order server-side for exactly 800000 paise.
     const rz = await createRazorpayOrderRemote({
       amountPaise: SITE.pricePaise,
       currency: SITE.currency,
-      receipt: order.order_id,
-      notes: { beterlyfe_order_id: order.order_id, product: SITE.product },
+      receipt: row.order_id,
+      notes: { beterlyfe_order_id: row.order_id, product: SITE.product },
     });
 
     // 3. Store the Razorpay order id.
-    const { error: updErr } = await supabaseAdmin
-      .from("orders")
-      .update({ razorpay_order_id: rz.id })
-      .eq("id", order.id);
-    if (updErr) {
-      console.error("[orders] store razorpay id failed", updErr);
+    const { error: attachErr } = await supabase.rpc("checkout_attach_razorpay_order", {
+      _order_uuid: row.order_uuid,
+      _razorpay_order_id: rz.id,
+    });
+    if (attachErr) {
+      console.error("[orders] store razorpay id failed", attachErr);
       throw new Error("ORDER_CREATE_FAILED");
     }
 
     return {
       ok: true as const,
-      order_id: order.order_id,
+      order_id: row.order_id,
       razorpay_order_id: rz.id,
       amount: SITE.pricePaise,
       currency: SITE.currency,
