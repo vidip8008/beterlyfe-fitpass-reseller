@@ -36,23 +36,30 @@ export const claimAdminRole = createServerFn({ method: "POST" })
       .toLowerCase();
     if (!email) return { granted: false as const };
 
-    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    try {
+      const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
 
-    const { data: allowed } = await supabaseAdmin
-      .from("admin_allowlist")
-      .select("email")
-      .eq("email", email)
-      .maybeSingle();
-    if (!allowed) return { granted: false as const };
+      const { data: allowed } = await supabaseAdmin
+        .from("admin_allowlist")
+        .select("email")
+        .eq("email", email)
+        .maybeSingle();
+      if (!allowed) return { granted: false as const };
 
-    const { error } = await supabaseAdmin
-      .from("user_roles")
-      .upsert({ user_id: context.userId, role: "admin" }, { onConflict: "user_id,role" });
-    if (error) {
-      console.error("[admin] role grant failed", error);
+      const { error } = await supabaseAdmin
+        .from("user_roles")
+        .upsert({ user_id: context.userId, role: "admin" }, { onConflict: "user_id,role" });
+      if (error) {
+        console.error("[admin] role grant failed", error);
+        return { granted: false as const };
+      }
+      return { granted: true as const };
+    } catch (e) {
+      // Bootstrap needs the privileged key; hosts without it simply cannot grant
+      // a first admin. Existing admins are unaffected (their role is already set).
+      console.error("[admin] role grant unavailable", (e as Error).message);
       return { granted: false as const };
     }
-    return { granted: true as const };
   });
 
 const signupSchema = z.object({
