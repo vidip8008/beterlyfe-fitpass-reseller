@@ -1,6 +1,6 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { Check, Loader2, Lock, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 import { SiteLayout } from "@/components/site/SiteLayout";
@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SITE, supportWhatsAppUrl } from "@/lib/site";
 import { checkoutSchema, createRazorpayOrder, verifyRazorpayPayment } from "@/lib/orders.functions";
-import { openRazorpayCheckout } from "@/lib/razorpay-client";
+import { loadRazorpayScript, openRazorpayCheckout } from "@/lib/razorpay-client";
 
 const TITLE = "Checkout — FITPASS 8-Month Membership ₹8,000 | BeterLyfe";
 const DESC = "Secure checkout for your FITPASS 8-month membership. One-time payment of ₹8,000 via Razorpay, digital voucher delivery on WhatsApp.";
@@ -26,7 +26,12 @@ export const Route = createFileRoute("/checkout")({
       { name: "twitter:card", content: "summary_large_image" },
       { name: "robots", content: "noindex" },
     ],
-    links: [{ rel: "canonical", href: "/checkout" }],
+    links: [
+      { rel: "canonical", href: "/checkout" },
+      { rel: "preconnect", href: "https://checkout.razorpay.com" },
+      { rel: "preconnect", href: "https://api.razorpay.com" },
+      { rel: "dns-prefetch", href: "https://lumberjack.razorpay.com" },
+    ],
   }),
   component: CheckoutPage,
 });
@@ -46,6 +51,11 @@ function CheckoutPage() {
   });
   const [errors, setErrors] = useState<Errors>({});
   const [phase, setPhase] = useState<"idle" | "creating" | "paying" | "verifying" | "failed" | "unconfigured">("idle");
+
+  // Preload Razorpay's script as soon as the page opens so the popup appears instantly.
+  useEffect(() => {
+    void loadRazorpayScript();
+  }, []);
 
   const set = (k: Field) => (e: React.ChangeEvent<HTMLInputElement>) =>
     setValues((v) => ({ ...v, [k]: e.target.value }));
