@@ -10,81 +10,39 @@ export const Route = createFileRoute("/api/public/razorpay-webhook")({
   server: {
     handlers: {
       POST: async ({ request }) => {
-        const { getWebhookSecret, hmacSha256Hex, safeEqual } = await import("@/lib/razorpay.server");
-        const secret = getWebhookSecret();
-        if (!secret) {
-          return new Response("Webhook not configured", { status: 503 });
-        }
-
         const rawBody = await request.text();
         const signature = request.headers.get("x-razorpay-signature") ?? "";
-        const expected = await hmacSha256Hex(secret, rawBody);
-        if (!signature || !safeEqual(expected, signature)) {
-          return new Response("Invalid signature", { status: 401 });
+        const eventId = request.headers.get("x-razorpay-event-id") ?? "";
+
+        const { getPublicServerClient } = await import("@/lib/supabase-public.server");
+        const supabase = getPublicServerClient();
+
+        // The database function re-verifies the signature against the stored
+        // webhook secret, records the event id (idempotency) and applies the
+        // order update. Nothing is written for an unverified request.
+        const { data, error } = await supabase.rpc("razorpay_webhook_apply", {
+          _raw_body: rawBody,
+          _signature: signature,
+          _event_id: eventId,
+        });
+
+        if (error) {
+          console.error("[webhook] apply failed", error.message);
+          return new Response("Webhook processing failed", { status: 500 });
         }
 
-        let payload: any;
-        try {
-          payload = JSON.parse(rawBody);
-        } catch {
+        const result = (data ?? {}) as { ok?: boolean; code?: string; duplicate?: boolean };
+        if (result.ok === false) {
+          if (result.code === "invalid_signature") {
+            return new Response("Invalid signature", { status: 401 });
+          }
+          if (result.code === "not_configured") {
+            return new Response("Webhook not configured", { status: 503 });
+          }
           return new Response("Bad payload", { status: 400 });
         }
 
-        const eventType: string = payload?.event ?? "unknown";
-        const paymentEntity = payload?.payload?.payment?.entity;
-        const orderEntity = payload?.payload?.order?.entity;
-        const razorpayOrderId: string | undefined = paymentEntity?.order_id ?? orderEntity?.id;
-        const razorpayPaymentId: string | undefined = paymentEntity?.id;
-        const eventId =
-          request.headers.get("x-razorpay-event-id") ??
-          `${eventType}:${razorpayOrderId ?? "none"}:${razorpayPaymentId ?? "none"}:${payload?.created_at ?? ""}`;
-
-        const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-
-        // Idempotency: insert the event id; a unique violation means we've already handled it.
-        const { error: evErr } = await supabaseAdmin.from("webhook_events").insert({
-          event_id: eventId,
-          event_type: eventType,
-          razorpay_order_id: razorpayOrderId ?? null,
-          payload,
-        });
-        if (evErr) {
-          if (evErr.code === "23505") return Response.json({ ok: true, duplicate: true });
-          console.error("[webhook] event log failed", evErr);
-          return new Response("Event log failed", { status: 500 });
-        }
-
-        if (!razorpayOrderId) return Response.json({ ok: true, ignored: true });
-
-        if (eventType === "order.paid" || eventType === "payment.captured") {
-          const { error } = await supabaseAdmin
-            .from("orders")
-            .update({
-              payment_status: "paid",
-              razorpay_payment_id: razorpayPaymentId ?? null,
-              voucher_status: "processing",
-            })
-            .eq("razorpay_order_id", razorpayOrderId)
-            .neq("payment_status", "paid");
-          if (error) {
-            console.error("[webhook] mark paid failed", error);
-            return new Response("Update failed", { status: 500 });
-          }
-        } else if (eventType === "payment.failed") {
-          await supabaseAdmin
-            .from("orders")
-            .update({ payment_status: "failed" })
-            .eq("razorpay_order_id", razorpayOrderId)
-            .eq("payment_status", "pending");
-        } else if (eventType === "refund.processed") {
-          await supabaseAdmin
-            .from("orders")
-            .update({ payment_status: "refunded" })
-            .eq("razorpay_order_id", razorpayOrderId)
-            .eq("payment_status", "paid");
-        }
-
-        return Response.json({ ok: true });
+        return Response.json(result);
       },
     },
   },
