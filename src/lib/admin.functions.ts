@@ -77,7 +77,20 @@ const signupSchema = z.object({
 export const createAccount = createServerFn({ method: "POST" })
   .inputValidator((input: unknown) => signupSchema.parse(input))
   .handler(async ({ data }) => {
-    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    let supabaseAdmin: Awaited<
+      typeof import("@/integrations/supabase/client.server")
+    >["supabaseAdmin"];
+    try {
+      ({ supabaseAdmin } = await import("@/integrations/supabase/client.server"));
+    } catch (e) {
+      console.error("[admin] signup unavailable", (e as Error).message);
+      return {
+        ok: false as const,
+        reason: "create_failed" as const,
+        message: "Account creation is not available on this host.",
+      };
+    }
+
 
     const { data: created, error: createErr } = await supabaseAdmin.auth.admin.createUser({
       email: data.email,
